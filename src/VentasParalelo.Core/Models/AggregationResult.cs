@@ -15,4 +15,31 @@ public sealed class AggregationResult
             .OrderByDescending(kv => kv.Value)
             .Take(n)
             .Select(kv => (kv.Key, kv.Value));
+
+    /// <summary>
+    /// Compara los totales con otro resultado. Se usa para verificar que todas las
+    /// estrategias de agregacion, sin importar como particionan o sincronizan, produzcan
+    /// exactamente el mismo resultado sobre el mismo dataset.
+    /// </summary>
+    public bool TotalesCoinciden(AggregationResult otro)
+    {
+        if (FilasProcesadas != otro.FilasProcesadas) return false;
+
+        return DiccionariosIguales(MontoPorSucursal, otro.MontoPorSucursal)
+            && DiccionariosIguales(UnidadesPorProducto, otro.UnidadesPorProducto);
+    }
+
+    private static bool DiccionariosIguales<TValue>(
+        Dictionary<string, TValue> a, Dictionary<string, TValue> b) where TValue : IEquatable<TValue>
+    {
+        if (a.Count != b.Count) return false;
+
+        foreach (var (clave, valor) in a)
+        {
+            if (!b.TryGetValue(clave, out var otroValor) || !valor.Equals(otroValor))
+                return false;
+        }
+
+        return true;
+    }
 }
