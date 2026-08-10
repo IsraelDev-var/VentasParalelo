@@ -44,6 +44,24 @@ Generar un dataset sintético de ventas:
 dotnet run --project src/VentasParalelo.Cli -- generar --filas 1000000 --salida data/ventas_1m.csv
 ```
 
+Comparar las estrategias de agregación sobre ese dataset (tiempo, filas/seg, speedup y
+eficiencia respecto al baseline secuencial):
+
+```bash
+dotnet run --project src/VentasParalelo.Cli -- comparar --archivo data/ventas_1m.csv --hilos 1,2,4,8
+```
+
+Estrategias incluidas hasta ahora:
+
+- **Secuencial (baseline)**: un solo hilo, referencia de correctitud y de speedup/eficiencia.
+- **`lock` sobre `Dictionary`**: `Parallel.ForEach` sobre particiones contiguas, pero cada fila
+  toma el mismo lock global antes de actualizar los acumuladores compartidos.
+- **`ConcurrentDictionary`**: mismo particionado, pero los acumuladores usan locking interno
+  más fino (por bucket) en vez de un único lock global.
+- **Acumuladores locales + reducción final**: cada partición acumula en un `AggregationResult`
+  propio sin sincronizarse durante el procesamiento (`localInit`/`localFinally`); el lock solo
+  se toma una vez por partición, al fusionar el resultado local en el compartido.
+
 ## Roadmap (entrega: 21 de agosto)
 
 **Semana 1 — fundamentos y primera comparación**

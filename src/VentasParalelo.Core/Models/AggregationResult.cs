@@ -29,6 +29,21 @@ public sealed class AggregationResult
             && DiccionariosIguales(UnidadesPorProducto, otro.UnidadesPorProducto);
     }
 
+    /// <summary>
+    /// Fusiona un acumulador local (de una particion) dentro de este resultado compartido.
+    /// Se usa una vez por particion (en localFinally), no una vez por fila.
+    /// </summary>
+    public void MergeFrom(AggregationResult otro)
+    {
+        foreach (var (clave, valor) in otro.MontoPorSucursal)
+            MontoPorSucursal[clave] = MontoPorSucursal.GetValueOrDefault(clave) + valor;
+
+        foreach (var (clave, valor) in otro.UnidadesPorProducto)
+            UnidadesPorProducto[clave] = UnidadesPorProducto.GetValueOrDefault(clave) + valor;
+
+        FilasProcesadas += otro.FilasProcesadas;
+    }
+
     private static bool DiccionariosIguales<TValue>(
         Dictionary<string, TValue> a, Dictionary<string, TValue> b) where TValue : IEquatable<TValue>
     {

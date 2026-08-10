@@ -90,13 +90,15 @@ int Comparar(string[] args)
     [
         new SequentialAggregator(),
         new LockDictionaryAggregator(),
-        new ConcurrentDictionaryAggregator()
+        new ConcurrentDictionaryAggregator(),
+        new LocalReductionAggregator()
     ];
 
-    Console.WriteLine($"{"Estrategia",-38}{"Hilos",7}{"Tiempo (s)",13}{"Filas/seg",16}");
-    Console.WriteLine(new string('-', 74));
+    Console.WriteLine($"{"Estrategia",-48}{"Hilos",6}{"Tiempo (s)",12}{"Filas/seg",14}{"Speedup",10}{"Eficiencia",11}");
+    Console.WriteLine(new string('-', 101));
 
     AggregationResult? referencia = null;
+    double? baselineSegundos = null;
 
     foreach (var estrategia in estrategias)
     {
@@ -106,10 +108,14 @@ int Comparar(string[] args)
         {
             var (resultado, metricas) = BenchmarkRunner.Ejecutar(estrategia, registros, h);
             referencia ??= resultado;
+            baselineSegundos ??= metricas.Duracion.TotalSeconds;
+
+            var speedup = baselineSegundos.Value / metricas.Duracion.TotalSeconds;
+            var eficiencia = speedup / metricas.Hilos;
 
             var marca = referencia.TotalesCoinciden(resultado) ? string.Empty : "  (!) totales distintos a la referencia";
             Console.WriteLine(
-                $"{metricas.Estrategia,-38}{metricas.Hilos,7}{metricas.Duracion.TotalSeconds,13:F3}{metricas.FilasPorSegundo,16:N0}{marca}");
+                $"{metricas.Estrategia,-48}{metricas.Hilos,6}{metricas.Duracion.TotalSeconds,12:F3}{metricas.FilasPorSegundo,14:N0}{speedup,10:F2}{eficiencia,11:P0}{marca}");
         }
     }
 

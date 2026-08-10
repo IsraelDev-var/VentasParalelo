@@ -10,7 +10,8 @@ public class AggregationStrategyTests
     private static readonly IAggregationStrategy[] EstrategiasParalelas =
     [
         new LockDictionaryAggregator(),
-        new ConcurrentDictionaryAggregator()
+        new ConcurrentDictionaryAggregator(),
+        new LocalReductionAggregator()
     ];
 
     public static IEnumerable<object[]> EstrategiasYHilos()
