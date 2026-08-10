@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VentasParalelo.Cli/VentasParalelo.Cli.csproj" />
+    <Project Path="src/VentasParalelo.Core/VentasParalelo.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/VentasParalelo.Core.Tests/VentasParalelo.Core.Tests.csproj" />
+  </Folder>
+</Solution>

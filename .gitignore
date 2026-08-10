@@ -1,0 +1,17 @@
+## .NET
+bin/
+obj/
+*.user
+
+## Rider / VS
+.vs/
+.idea/
+*.suo
+
+## Datasets generados (pueden pesar cientos de MB, no se versionan)
+/data/
+*.csv
+
+## OS
+.DS_Store
+Thumbs.db
