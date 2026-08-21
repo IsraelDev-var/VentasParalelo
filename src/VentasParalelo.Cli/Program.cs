@@ -102,6 +102,7 @@ void EjecutarComparacion(SaleRecord[] registros, int[] hilos)
         new RoundRobinReductionAggregator(),
         new DynamicChunkReductionAggregator(),
         new HierarchicalReductionAggregator(),
+        new CoarseGrainedTaskAggregator(),
         new PlinqGroupByAggregator()
     ];
 
@@ -175,6 +176,7 @@ int Escalar(string[] args)
         "concurrent" => new ConcurrentDictionaryAggregator(),
         "roundrobin" => new RoundRobinReductionAggregator(),
         "chunking" => new DynamicChunkReductionAggregator(),
+        "grueso" => new CoarseGrainedTaskAggregator(),
         "plinq" => new PlinqGroupByAggregator(),
         _ => throw new ArgumentException($"Estrategia desconocida: '{estrategiaNombre}'.")
     };
@@ -243,7 +245,7 @@ void ImprimirAyuda()
         Uso:
           generar  --filas <N> --salida <ruta.csv>
           comparar --archivo <ruta.csv> [--hilos 1,2,4,8]
-          escalar  --tipo fuerte|debil [--estrategia local|arbol|lock|concurrent|roundrobin|chunking|plinq]
+          escalar  --tipo fuerte|debil [--estrategia local|arbol|lock|concurrent|roundrobin|chunking|grueso|plinq]
                    [--hilos 1,2,4,8] [--volumenes 1000000,5000000,20000000] [--filas-base 250000]
 
         Ejemplos:

@@ -15,6 +15,7 @@ public class AggregationStrategyTests
         new RoundRobinReductionAggregator(),
         new DynamicChunkReductionAggregator(),
         new HierarchicalReductionAggregator(),
+        new CoarseGrainedTaskAggregator(),
         new PlinqGroupByAggregator()
     ];
 
@@ -55,6 +56,7 @@ public class AggregationStrategyTests
         yield return [new RoundRobinReductionAggregator()];
         yield return [new DynamicChunkReductionAggregator()];
         yield return [new HierarchicalReductionAggregator()];
+        yield return [new CoarseGrainedTaskAggregator()];
     }
 
     [Theory]

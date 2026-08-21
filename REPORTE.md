@@ -97,6 +97,64 @@ Todas las estrategias reproducen exactamente los mismos totales que el baseline 
   que empeora, y ese es justamente el costo de programar en un nivel mas alto — se gana
   legibilidad, se pierde control fino (y con el, la capacidad de medir mapeo/reduccion/contencion).
 
+## 1.1 Grano grueso: eliminar toda dependencia entre hilos (5,000,000 filas)
+
+Se agrego una octava estrategia, `CoarseGrainedTaskAggregator`: en vez de que las particiones
+compartan siquiera el lock de merge de "acumuladores locales" (que ya es minimo, una vez por
+particion), cada hilo escribe su resultado en su propio slot de un arreglo — cero estado
+compartido y cero locks durante todo el computo — y la fusion final es un solo paso secuencial
+en un unico hilo, ya sin ninguna escritura concurrente que sincronizar.
+
+Con el dataset de 1,000,000 filas usado en la seccion 1, las mediciones entre corridas
+identicas variaban demasiado (la eficiencia de "reduccion jerarquica" con 8 hilos salto de 82%
+a 97% y luego a 29% en tres corridas seguidas) porque el trabajo por hilo es tan chico
+(~0.02s) que el ruido de otros procesos de esta maquina (no es un servidor de benchmarking
+dedicado) domina la medicion. Con 5,000,000 filas el trabajo por hilo es 5x mayor y el ruido se
+diluye; los resultados salen estables y repetibles:
+
+```
+Estrategia                                              Hilos  Tiempo(s)   Filas/seg   Speedup  Eficiencia
+------------------------------------------------------------------------------------------------------------
+Secuencial (baseline)                                       1      0.801   6,238,438      1.00       100%
+lock sobre Dictionary                                        1      1.366   3,661,234      0.59        59%
+lock sobre Dictionary                                        8      1.592   3,141,630      0.50         6%
+ConcurrentDictionary                                          1      1.276   3,917,494      0.63        63%
+ConcurrentDictionary                                          8      0.884   5,658,369      0.91        11%
+Acumuladores locales (contigua)                               1      0.768   6,512,627      1.04       104%
+Acumuladores locales (contigua)                               8      0.236  21,207,001      3.40        42%
+Round-robin                                                    1      0.783   6,389,048      1.02       102%
+Round-robin                                                    8      0.340  14,713,698      2.36        29%
+Chunking dinamico                                              1      0.795   6,289,005      1.01       101%
+Chunking dinamico                                              8      0.230  21,774,367      3.49        44%
+Reduccion jerarquica en arbol                                  1      0.766   6,525,210      1.05       105%
+Reduccion jerarquica en arbol                                  8      0.251  19,897,441      3.19        40%
+Grano grueso: computo independiente + fusion secuencial        1      0.724   6,906,468      1.11       111%
+Grano grueso: computo independiente + fusion secuencial        8      0.226  22,121,838      3.55        44%
+PLINQ GroupBy                                                  1      1.958   2,553,936      0.41        41%
+PLINQ GroupBy                                                  8      0.926   5,400,470      0.87        11%
+```
+
+Lecturas:
+
+- **Grano grueso gana**: con 8 hilos es la estrategia mas rapida de todas (3.55x, 22.1M
+  filas/seg), apenas por delante de chunking dinamico (3.49x) y acumuladores locales por rangos
+  contiguos (3.40x). Confirma la intuicion de liberar toda dependencia entre hilos: al no
+  compartir ni siquiera el lock de merge durante el computo (solo se toca memoria compartida
+  una vez, al final, en un solo hilo), no queda ningun punto de sincronizacion que pueda
+  generar espera entre hilos.
+- **La diferencia entre las variantes "sin contencion" (acumuladores locales, round-robin,
+  chunking, arbol, grano grueso) es chica una vez que el trabajo por hilo es grande** (3.19x a
+  3.55x, todas entre 40-44% de eficiencia con 8 hilos) — la eleccion entre ellas importa mas
+  para datasets chicos o con overhead relativo alto que para este volumen.
+- **Round-robin es consistentemente la peor del grupo "sin contencion"** (2.36x, 29%) por la
+  localidad de cache: acceder al arreglo con paso `P` en vez de en bloques contiguos cuesta mas
+  cache misses, y ese costo no desaparece al crecer el dataset.
+- **La eficiencia de todas las estrategias buenas cae de forma pareja de ~100% (1-2 hilos) a
+  ~40-44% (8 hilos)**: esto ya no es ruido (los resultados son repetibles), sino una senal real
+  de que esta maquina tiene menos nucleos fisicos que 8 hilos logicos (probablemente 4 nucleos
+  con hyperthreading) — a partir de cierto punto, agregar "hilos" logicos adicionales compite
+  por los mismos nucleos fisicos en vez de sumar capacidad de computo nueva.
+
 ## 2. Escalabilidad fuerte (mismo dataset, mas hilos) — `escalar --tipo fuerte`
 
 Estrategia: acumuladores locales + reduccion final.
@@ -178,12 +236,20 @@ tiempo total.
 5. La escalabilidad debil confirma que el diseño de acumuladores locales tolera crecer datos y
    hilos en proporcion manteniendo el tiempo de respuesta constante — la propiedad deseable para
    un job batch nocturno que debe absorber datasets cada vez mas grandes agregando hardware.
+6. Llevar la idea al extremo — grano grueso, cero estado compartido durante todo el computo, una
+   sola fusion secuencial al final — dio la mejor marca medida en este proyecto (3.55x/44% con
+   8 hilos sobre 5M filas), aunque por un margen chico sobre las demas variantes "sin
+   contencion": una vez eliminada la sincronizacion por fila, el techo real pasa a estar puesto
+   por la cantidad de nucleos fisicos disponibles, no por el detalle fino de como se particiona
+   o se reduce.
 
 ## Como reproducir estos numeros
 
 ```bash
 dotnet run --project src/VentasParalelo.Cli -c Release -- generar --filas 1000000 --salida data/ventas_1m.csv
+dotnet run --project src/VentasParalelo.Cli -c Release -- generar --filas 5000000 --salida data/ventas_5m.csv
 dotnet run --project src/VentasParalelo.Cli -c Release -- comparar --archivo data/ventas_1m.csv --hilos 1,2,4,8
+dotnet run --project src/VentasParalelo.Cli -c Release -- comparar --archivo data/ventas_5m.csv --hilos 1,2,4,8
 dotnet run --project src/VentasParalelo.Cli -c Release -- escalar --tipo fuerte --volumenes 1000000,5000000,20000000 --hilos 1,2,4,8
 dotnet run --project src/VentasParalelo.Cli -c Release -- escalar --tipo debil --filas-base 250000 --hilos 1,2,4,8
 ```

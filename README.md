@@ -83,6 +83,12 @@ Estrategias incluidas:
   de "acumuladores locales", pero el merge final no es un solo paso serializado bajo un lock:
   los resultados parciales se combinan de a pares en un árbol binario, en paralelo
   (`Parallel.Invoke`), pasando de O(P) locks seriales a O(log P) niveles paralelos.
+- **Grano grueso (cómputo independiente + fusión secuencial)**: `P` particiones grandes (una
+  por hilo), cada una escribe su resultado local en su propio slot de un arreglo sin ningún
+  lock ni estado compartido durante el cómputo — cero dependencia entre hilos. La fusión final
+  ocurre en un solo hilo, después de que todas las particiones terminaron, sin sincronización.
+  En las mediciones de este proyecto (ver [REPORTE.md](REPORTE.md)) fue la estrategia más
+  rápida con 8 hilos.
 - **PLINQ `GroupBy`**: misma agregación expresada de forma declarativa
   (`AsParallel().GroupBy(...)`) en vez de particionar y reducir a mano; no expone su propio
   particionado/reducción, así que no mide diagnósticos.
