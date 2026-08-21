@@ -109,51 +109,50 @@ Con el dataset de 1,000,000 filas usado en la seccion 1, las mediciones entre co
 identicas variaban demasiado (la eficiencia de "reduccion jerarquica" con 8 hilos salto de 82%
 a 97% y luego a 29% en tres corridas seguidas) porque el trabajo por hilo es tan chico
 (~0.02s) que el ruido de otros procesos de esta maquina (no es un servidor de benchmarking
-dedicado) domina la medicion. Con 5,000,000 filas el trabajo por hilo es 5x mayor y el ruido se
-diluye; los resultados salen estables y repetibles:
+dedicado) domina la medicion. Con 5,000,000 filas el trabajo por hilo es 5x mayor, pero el
+ruido **no desaparece del todo**: repitiendo `comparar --archivo data/ventas_5m.csv --hilos 8`
+tres veces seguidas (mismo binario, misma maquina, sin cambios de codigo entre corridas) el
+speedup con 8 hilos de cada estrategia salio asi:
 
-```
-Estrategia                                              Hilos  Tiempo(s)   Filas/seg   Speedup  Eficiencia
-------------------------------------------------------------------------------------------------------------
-Secuencial (baseline)                                       1      0.801   6,238,438      1.00       100%
-lock sobre Dictionary                                        1      1.366   3,661,234      0.59        59%
-lock sobre Dictionary                                        8      1.592   3,141,630      0.50         6%
-ConcurrentDictionary                                          1      1.276   3,917,494      0.63        63%
-ConcurrentDictionary                                          8      0.884   5,658,369      0.91        11%
-Acumuladores locales (contigua)                               1      0.768   6,512,627      1.04       104%
-Acumuladores locales (contigua)                               8      0.236  21,207,001      3.40        42%
-Round-robin                                                    1      0.783   6,389,048      1.02       102%
-Round-robin                                                    8      0.340  14,713,698      2.36        29%
-Chunking dinamico                                              1      0.795   6,289,005      1.01       101%
-Chunking dinamico                                              8      0.230  21,774,367      3.49        44%
-Reduccion jerarquica en arbol                                  1      0.766   6,525,210      1.05       105%
-Reduccion jerarquica en arbol                                  8      0.251  19,897,441      3.19        40%
-Grano grueso: computo independiente + fusion secuencial        1      0.724   6,906,468      1.11       111%
-Grano grueso: computo independiente + fusion secuencial        8      0.226  22,121,838      3.55        44%
-PLINQ GroupBy                                                  1      1.958   2,553,936      0.41        41%
-PLINQ GroupBy                                                  8      0.926   5,400,470      0.87        11%
-```
+| Estrategia | Corrida 1 | Corrida 2 | Corrida 3 | Promedio |
+|---|---|---|---|---|
+| Acumuladores locales (contigua) | 6.84x / 86% | 6.06x / 76% | 6.00x / 75% | **6.30x / 79%** |
+| Reduccion jerarquica en arbol | 6.61x / 83% | 6.19x / 77% | 5.64x / 71% | **6.15x / 77%** |
+| Grano grueso | 6.28x / 78% | 5.95x / 74% | 5.94x / 74% | **6.06x / 75%** |
+| Chunking dinamico | 6.69x / 84% | 3.59x / 45% | 3.72x / 47% | 4.67x / 59% (muy inestable) |
+| Round-robin | 4.01x / 50% | 4.35x / 54% | 4.49x / 56% | **4.28x / 53%** |
+| `lock` sobre Dictionary | 0.45x / 6% | 0.40x / 5% | 0.40x / 5% | 0.42x / 5% |
+| `ConcurrentDictionary` | 0.69x / 9% | 0.55x / 7% | 0.64x / 8% | 0.63x / 8% |
+| PLINQ GroupBy | 0.52x / 6% | 0.41x / 5% | 0.40x / 5% | 0.44x / 5% |
 
-Lecturas:
+(La variabilidad de chunking dinamico entre corridas es en parte un artefacto de medicion
+propio: las corridas 2 y 3 se lanzaron solo con `--hilos 8`, sin las pasadas previas a 1/2/4
+hilos que "calientan" el JIT de esa estrategia en la corrida completa — otra fuente de ruido a
+tener en cuenta al comparar numeros de corridas con distinta metodologia.)
 
-- **Grano grueso gana**: con 8 hilos es la estrategia mas rapida de todas (3.55x, 22.1M
-  filas/seg), apenas por delante de chunking dinamico (3.49x) y acumuladores locales por rangos
-  contiguos (3.40x). Confirma la intuicion de liberar toda dependencia entre hilos: al no
-  compartir ni siquiera el lock de merge durante el computo (solo se toca memoria compartida
-  una vez, al final, en un solo hilo), no queda ningun punto de sincronizacion que pueda
-  generar espera entre hilos.
-- **La diferencia entre las variantes "sin contencion" (acumuladores locales, round-robin,
-  chunking, arbol, grano grueso) es chica una vez que el trabajo por hilo es grande** (3.19x a
-  3.55x, todas entre 40-44% de eficiencia con 8 hilos) — la eleccion entre ellas importa mas
-  para datasets chicos o con overhead relativo alto que para este volumen.
-- **Round-robin es consistentemente la peor del grupo "sin contencion"** (2.36x, 29%) por la
-  localidad de cache: acceder al arreglo con paso `P` en vez de en bloques contiguos cuesta mas
-  cache misses, y ese costo no desaparece al crecer el dataset.
-- **La eficiencia de todas las estrategias buenas cae de forma pareja de ~100% (1-2 hilos) a
-  ~40-44% (8 hilos)**: esto ya no es ruido (los resultados son repetibles), sino una senal real
-  de que esta maquina tiene menos nucleos fisicos que 8 hilos logicos (probablemente 4 nucleos
-  con hyperthreading) — a partir de cierto punto, agregar "hilos" logicos adicionales compite
-  por los mismos nucleos fisicos en vez de sumar capacidad de computo nueva.
+Lecturas honestas (no la primera version de este reporte, que declaraba un "ganador" a partir
+de una sola corrida — error corregido aqui):
+
+- **No hay un ganador confiable entre acumuladores locales, arbol y grano grueso**: sus
+  promedios (79%, 77%, 75% de eficiencia) estan dentro del margen de variacion que ya se ve
+  entre corridas de la misma estrategia. Con la precision de este benchmark (`Stopwatch`
+  simple, sin calentamiento ni multiples iteraciones promediadas dentro del mismo proceso) no
+  se puede afirmar cual de las tres es "la mejor" — son estadisticamente equivalentes en este
+  hardware.
+- **Round-robin es consistentemente la mas debil de las cinco variantes "sin contencion por
+  fila"** en las tres corridas (50%, 54%, 56%), coherente con la teoria: acceder al arreglo con
+  paso `P` en vez de en bloques contiguos cuesta mas fallos de cache, y ese costo no depende
+  del ruido del sistema — se repite de forma estable.
+- **Lo que sigue siendo completamente robusto, sin excepcion en ninguna corrida (de esta
+  seccion ni de la seccion 1)**: las estrategias que sincronizan una vez por fila (`lock`,
+  `ConcurrentDictionary`, PLINQ) rinden 5%-13% de eficiencia; las que acumulan local y
+  sincronizan una vez por particion rinden 45%-117%. Esa diferencia de un orden de magnitud es
+  la conclusion central del proyecto, y es la unica que se sostiene corrida tras corrida.
+- **Leccion metodologica**: en una maquina de uso general (no un servidor dedicado a
+  benchmarking) hace falta promediar varias corridas — y mantener la misma metodologia de
+  calentamiento entre ellas — antes de declarar diferencias finas entre estrategias como
+  "reales". Diferencias grandes (ordenes de magnitud, como lock vs. acumuladores locales) se
+  ven en cualquier corrida; diferencias chicas (cual de las cinco buenas es la mejor) no.
 
 ## 2. Escalabilidad fuerte (mismo dataset, mas hilos) — `escalar --tipo fuerte`
 
@@ -237,11 +236,13 @@ tiempo total.
    hilos en proporcion manteniendo el tiempo de respuesta constante — la propiedad deseable para
    un job batch nocturno que debe absorber datasets cada vez mas grandes agregando hardware.
 6. Llevar la idea al extremo — grano grueso, cero estado compartido durante todo el computo, una
-   sola fusion secuencial al final — dio la mejor marca medida en este proyecto (3.55x/44% con
-   8 hilos sobre 5M filas), aunque por un margen chico sobre las demas variantes "sin
-   contencion": una vez eliminada la sincronizacion por fila, el techo real pasa a estar puesto
-   por la cantidad de nucleos fisicos disponibles, no por el detalle fino de como se particiona
-   o se reduce.
+   sola fusion secuencial al final — no demostro ser mejor que acumuladores locales o reduccion
+   en arbol: las tres promedian 75-79% de eficiencia con 8 hilos sobre 5M filas, dentro del
+   margen de ruido de esta maquina (ver seccion 1.1). Lo que si se confirma es que, una vez
+   eliminada la sincronizacion por fila, el techo real pasa a estar puesto por la cantidad de
+   nucleos fisicos disponibles, no por el detalle fino de como se particiona o se reduce — y que
+   round-robin es la unica variante de ese grupo con una desventaja medible y repetible
+   (localidad de cache).
 
 ## Como reproducir estos numeros
 
