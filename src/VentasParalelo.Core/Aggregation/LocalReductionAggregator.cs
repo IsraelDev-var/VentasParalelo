@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using VentasParalelo.Core.Metrics;
 using VentasParalelo.Core.Models;
 using VentasParalelo.Core.Partitioning;
 
@@ -19,6 +21,7 @@ public sealed class LocalReductionAggregator : IAggregationStrategy
     {
         var resultado = new AggregationResult();
         var mergeLock = new object();
+        var diag = new AggregationDiagnostics();
         var particiones = ContiguousRangePartitioner.Partition(registros.Length, maxDegreeOfParallelism);
 
         Parallel.ForEach(
@@ -27,20 +30,30 @@ public sealed class LocalReductionAggregator : IAggregationStrategy
             localInit: () => new AggregationResult(),
             body: (rango, _, local) =>
             {
+                var mapeo = Stopwatch.StartNew();
                 for (var i = rango.Start.Value; i < rango.End.Value; i++)
                     SequentialAggregator.Acumular(local, in registros[i]);
 
                 local.FilasProcesadas += rango.End.Value - rango.Start.Value;
+                mapeo.Stop();
+                diag.SumarMapeo(mapeo.Elapsed);
                 return local;
             },
             localFinally: local =>
             {
+                // El merge solo ocurre una vez por particion (no una vez por fila), asi que
+                // el lock aqui casi no compite: por eso no se mide como "contencion" aparte,
+                // sino como parte del costo fijo de la reduccion.
+                var reduccion = Stopwatch.StartNew();
                 lock (mergeLock)
                 {
                     resultado.MergeFrom(local);
                 }
+                reduccion.Stop();
+                diag.SumarReduccion(reduccion.Elapsed);
             });
 
+        resultado.Diagnosticos = diag;
         return resultado;
     }
 }

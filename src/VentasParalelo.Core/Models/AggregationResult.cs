@@ -1,3 +1,5 @@
+using VentasParalelo.Core.Metrics;
+
 namespace VentasParalelo.Core.Models;
 
 /// <summary>
@@ -9,6 +11,12 @@ public sealed class AggregationResult
     public Dictionary<string, decimal> MontoPorSucursal { get; } = new();
     public Dictionary<string, long> UnidadesPorProducto { get; } = new();
     public long FilasProcesadas { get; set; }
+
+    /// <summary>
+    /// Desglose de tiempo de mapeo/reduccion/contencion, si la estrategia que produjo este
+    /// resultado lo mide. Null si la estrategia no lo soporta (p. ej. PLINQ).
+    /// </summary>
+    public AggregationDiagnostics? Diagnosticos { get; set; }
 
     public IEnumerable<(string Producto, long Unidades)> TopProductos(int n) =>
         UnidadesPorProducto

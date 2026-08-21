@@ -44,40 +44,68 @@ Generar un dataset sintético de ventas:
 dotnet run --project src/VentasParalelo.Cli -- generar --filas 1000000 --salida data/ventas_1m.csv
 ```
 
-Comparar las estrategias de agregación sobre ese dataset (tiempo, filas/seg, speedup y
-eficiencia respecto al baseline secuencial):
+Comparar las estrategias de agregación sobre ese dataset (tiempo, filas/seg, speedup,
+eficiencia respecto al baseline secuencial y, cuando la estrategia lo soporta, desglose de
+tiempo de mapeo/reducción/contención):
 
 ```bash
 dotnet run --project src/VentasParalelo.Cli -- comparar --archivo data/ventas_1m.csv --hilos 1,2,4,8
 ```
 
-Estrategias incluidas hasta ahora:
+Barrido de escalabilidad fuerte (mismo dataset, más hilos) o débil (filas proporcionales a
+los hilos), sobre datos generados en memoria (sin pasar por CSV):
+
+```bash
+dotnet run --project src/VentasParalelo.Cli -- escalar --tipo fuerte --volumenes 1000000,5000000,20000000 --hilos 1,2,4,8
+dotnet run --project src/VentasParalelo.Cli -- escalar --tipo debil --filas-base 250000 --hilos 1,2,4,8
+```
+
+Estrategias incluidas:
 
 - **Secuencial (baseline)**: un solo hilo, referencia de correctitud y de speedup/eficiencia.
 - **`lock` sobre `Dictionary`**: `Parallel.ForEach` sobre particiones contiguas, pero cada fila
-  toma el mismo lock global antes de actualizar los acumuladores compartidos.
+  toma el mismo lock global antes de actualizar los acumuladores compartidos. Mide su propio
+  tiempo de contención (espera para adquirir el lock).
 - **`ConcurrentDictionary`**: mismo particionado, pero los acumuladores usan locking interno
-  más fino (por bucket) en vez de un único lock global.
-- **Acumuladores locales + reducción final**: cada partición acumula en un `AggregationResult`
-  propio sin sincronizarse durante el procesamiento (`localInit`/`localFinally`); el lock solo
-  se toma una vez por partición, al fusionar el resultado local en el compartido.
+  más fino (por bucket) en vez de un único lock global. Su contención es interna y no se puede
+  medir desde afuera.
+- **Acumuladores locales + reducción final**: cada partición contigua acumula en un
+  `AggregationResult` propio sin sincronizarse durante el procesamiento
+  (`localInit`/`localFinally`); el lock solo se toma una vez por partición, al fusionar el
+  resultado local en el compartido. Mide tiempo de mapeo y de reducción.
+- **Particionado round-robin**: mismo algoritmo de reducción local que la anterior, pero
+  repartiendo filas `i, i+P, i+2P, ...` por partición en vez de bloques contiguos — aísla el
+  efecto de la localidad de caché frente al particionado por rangos.
+- **Chunking dinámico**: en vez de fijar de antemano qué partición procesa cada hilo, corta el
+  arreglo en chunks pequeños tomados dinámicamente de una cola compartida
+  (`Partitioner.Create`), balanceando mejor cuando el costo por fila no es uniforme.
+- **Reducción jerárquica en árbol**: cada partición contigua se agrega localmente igual que la
+  de "acumuladores locales", pero el merge final no es un solo paso serializado bajo un lock:
+  los resultados parciales se combinan de a pares en un árbol binario, en paralelo
+  (`Parallel.Invoke`), pasando de O(P) locks seriales a O(log P) niveles paralelos.
+- **PLINQ `GroupBy`**: misma agregación expresada de forma declarativa
+  (`AsParallel().GroupBy(...)`) en vez de particionar y reducir a mano; no expone su propio
+  particionado/reducción, así que no mide diagnósticos.
+
+Ver [REPORTE.md](REPORTE.md) para los resultados medidos en detalle (comparación de
+estrategias, escalabilidad fuerte/débil de 1M a 20M filas, y desglose de contención).
 
 ## Roadmap (entrega: 21 de agosto)
 
-**Semana 1 — fundamentos y primera comparación**
+**Semana 1 — fundamentos y primera comparación** ✅
 1. Estructura del proyecto, modelo de dominio y generador de datos sintéticos.
 2. Agregador secuencial (baseline) y agregador paralelo comparando `lock` + `Dictionary`
    vs. `ConcurrentDictionary`.
 3. Acumuladores locales por partición con reducción final (map-reduce) + métricas de
    speedup y eficiencia frente al baseline.
 
-**Semana 2 — estrategias de particionado y reducción**
+**Semana 2 — estrategias de particionado y reducción** ✅
 4. Particionado por rangos contiguos vs. chunking dinámico vs. round-robin.
 5. PLINQ con `GroupBy` vs. reducción manual con `localInit`/`localFinally`.
 6. Reducción en un solo paso vs. reducción jerárquica en árbol.
 
-**Semana 3 — escalabilidad y reporte final**
+**Semana 3 — escalabilidad y reporte final** ✅
 7. Barrido de volumen (1M / 5M / 20M filas) y de hilos (1..N), escalabilidad fuerte y débil.
 8. Medición de tiempo de contención por estrategia de sincronización y desglose
    mapeo vs. reducción.
-9. Consolidación de resultados, gráficos y reporte final.
+9. Consolidación de resultados, gráficos y reporte final — ver [REPORTE.md](REPORTE.md).

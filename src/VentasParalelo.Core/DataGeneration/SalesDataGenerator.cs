@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using VentasParalelo.Core.Models;
 
 namespace VentasParalelo.Core.DataGeneration;
 
@@ -27,29 +28,54 @@ public static class SalesDataGenerator
     {
         var random = new Random(seed);
         var startDate = new DateOnly(2025, 1, 1);
-        var dateRangeDays = 365;
 
         using var writer = new StreamWriter(path, false, Encoding.UTF8);
         writer.WriteLine("fecha,sucursal,producto,cantidad,monto");
 
         for (long i = 0; i < rowCount; i++)
         {
-            var fecha = startDate.AddDays(random.Next(dateRangeDays));
-            var sucursal = Sucursales[random.Next(Sucursales.Length)];
-            var producto = Productos[random.Next(Productos.Length)];
-            var cantidad = random.Next(1, 21);
-            var precioUnitario = 500 + random.NextDouble() * 45000;
-            var monto = Math.Round(cantidad * precioUnitario, 2);
+            var r = GenerarRegistro(random, startDate);
 
-            writer.Write(fecha.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+            writer.Write(r.Fecha.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
             writer.Write(',');
-            writer.Write(sucursal);
+            writer.Write(r.Sucursal);
             writer.Write(',');
-            writer.Write(producto);
+            writer.Write(r.Producto);
             writer.Write(',');
-            writer.Write(cantidad.ToString(CultureInfo.InvariantCulture));
+            writer.Write(r.Cantidad.ToString(CultureInfo.InvariantCulture));
             writer.Write(',');
-            writer.WriteLine(monto.ToString(CultureInfo.InvariantCulture));
+            writer.WriteLine(r.Monto.ToString(CultureInfo.InvariantCulture));
         }
+    }
+
+    /// <summary>
+    /// Genera el dataset directamente en memoria (sin pasar por CSV), pensado para el barrido
+    /// de escalabilidad: evita el costo de escribir/leer disco al comparar muchos volumenes.
+    /// Usa la misma logica de generacion de filas que <see cref="GenerateCsv"/>.
+    /// </summary>
+    public static SaleRecord[] GenerateInMemory(long rowCount, int seed = 12345)
+    {
+        var random = new Random(seed);
+        var startDate = new DateOnly(2025, 1, 1);
+        var registros = new SaleRecord[rowCount];
+
+        for (long i = 0; i < rowCount; i++)
+            registros[i] = GenerarRegistro(random, startDate);
+
+        return registros;
+    }
+
+    private static SaleRecord GenerarRegistro(Random random, DateOnly startDate)
+    {
+        const int dateRangeDays = 365;
+
+        var fecha = startDate.AddDays(random.Next(dateRangeDays));
+        var sucursal = Sucursales[random.Next(Sucursales.Length)];
+        var producto = Productos[random.Next(Productos.Length)];
+        var cantidad = random.Next(1, 21);
+        var precioUnitario = 500 + random.NextDouble() * 45000;
+        var monto = Math.Round((decimal)(cantidad * precioUnitario), 2);
+
+        return new SaleRecord(fecha, sucursal, producto, cantidad, monto);
     }
 }

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using VentasParalelo.Core.Metrics;
 using VentasParalelo.Core.Models;
 using VentasParalelo.Core.Partitioning;
 
@@ -17,6 +19,7 @@ public sealed class LockDictionaryAggregator : IAggregationStrategy
     {
         var result = new AggregationResult();
         var sync = new object();
+        var diag = new AggregationDiagnostics();
         var particiones = ContiguousRangePartitioner.Partition(registros.Length, maxDegreeOfParallelism);
 
         Parallel.ForEach(
@@ -27,14 +30,27 @@ public sealed class LockDictionaryAggregator : IAggregationStrategy
                 for (var i = rango.Start.Value; i < rango.End.Value; i++)
                 {
                     var r = registros[i];
-                    lock (sync)
+
+                    // Tiempo de espera para adquirir el lock global: aproxima la contencion
+                    // real que paga esta estrategia por sincronizar en cada fila.
+                    var espera = Stopwatch.StartNew();
+                    Monitor.Enter(sync);
+                    espera.Stop();
+                    diag.SumarContencion(espera.Elapsed);
+
+                    try
                     {
                         SequentialAggregator.Acumular(result, in r);
+                    }
+                    finally
+                    {
+                        Monitor.Exit(sync);
                     }
                 }
             });
 
         result.FilasProcesadas = registros.Length;
+        result.Diagnosticos = diag;
         return result;
     }
 }

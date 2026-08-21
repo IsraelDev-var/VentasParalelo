@@ -11,7 +11,11 @@ public class AggregationStrategyTests
     [
         new LockDictionaryAggregator(),
         new ConcurrentDictionaryAggregator(),
-        new LocalReductionAggregator()
+        new LocalReductionAggregator(),
+        new RoundRobinReductionAggregator(),
+        new DynamicChunkReductionAggregator(),
+        new HierarchicalReductionAggregator(),
+        new PlinqGroupByAggregator()
     ];
 
     public static IEnumerable<object[]> EstrategiasYHilos()
@@ -42,5 +46,35 @@ public class AggregationStrategyTests
         {
             File.Delete(path);
         }
+    }
+
+    public static IEnumerable<object[]> EstrategiasConDiagnosticos()
+    {
+        yield return [new LockDictionaryAggregator()];
+        yield return [new LocalReductionAggregator()];
+        yield return [new RoundRobinReductionAggregator()];
+        yield return [new DynamicChunkReductionAggregator()];
+        yield return [new HierarchicalReductionAggregator()];
+    }
+
+    [Theory]
+    [MemberData(nameof(EstrategiasConDiagnosticos))]
+    public void Aggregate_ConMasDeUnHilo_PoblaDiagnosticos(IAggregationStrategy estrategia)
+    {
+        var registros = SalesDataGenerator.GenerateInMemory(20_000);
+
+        var resultado = estrategia.Aggregate(registros, 4);
+
+        Assert.NotNull(resultado.Diagnosticos);
+    }
+
+    [Fact]
+    public void PlinqGroupByAggregator_NoPoblaDiagnosticos()
+    {
+        var registros = SalesDataGenerator.GenerateInMemory(5_000);
+
+        var resultado = new PlinqGroupByAggregator().Aggregate(registros, 4);
+
+        Assert.Null(resultado.Diagnosticos);
     }
 }
