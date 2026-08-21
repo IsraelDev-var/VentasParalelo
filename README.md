@@ -94,7 +94,9 @@ Estrategias incluidas:
   particionado/reducción, así que no mide diagnósticos.
 
 Ver [REPORTE.md](REPORTE.md) para los resultados medidos en detalle (comparación de
-estrategias, escalabilidad fuerte/débil de 1M a 20M filas, y desglose de contención).
+estrategias, escalabilidad fuerte/débil de 1M a 20M filas, desglose de contención, y por qué se
+activó Server GC en `VentasParalelo.Cli.csproj` — el recolector de basura es una forma de
+sincronización entre hilos que no aparece en ningún `lock`).
 
 ## Roadmap (entrega: 21 de agosto)
 

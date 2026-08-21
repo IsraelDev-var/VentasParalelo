@@ -5,6 +5,11 @@ sobre esta misma maquina (`Environment.ProcessorCount` = 8 hilos logicos), con l
 `comparar` y `escalar` del CLI, contra datasets generados con `SalesDataGenerator` (semilla fija,
 resultados reproducibles).
 
+> Nota sobre las tablas de las secciones 1 y 2: se midieron antes de activar Server GC (ver
+> seccion 1.2). Los numeros absolutos de esas tablas quedaron desactualizados frente a la
+> configuracion final del proyecto; las lecturas cualitativas (que estrategia gana, por que)
+> siguen siendo validas. La seccion 1.2 tiene la comparacion directa antes/despues.
+
 ## 1. Estrategias comparadas (1,000,000 filas, hilos 1/2/4/8)
 
 ```
@@ -153,6 +158,43 @@ de una sola corrida — error corregido aqui):
   calentamiento entre ellas — antes de declarar diferencias finas entre estrategias como
   "reales". Diferencias grandes (ordenes de magnitud, como lock vs. acumuladores locales) se
   ven en cualquier corrida; diferencias chicas (cual de las cinco buenas es la mejor) no.
+
+## 1.2 Server GC: los hilos no son tan independientes como parece
+
+Los hilos "sin contencion" (acumuladores locales, round-robin, chunking, arbol, grueso) no
+comparten ningun lock durante el computo, pero si comparten algo que no esta en el codigo: el
+heap administrado de .NET. Cada fila procesada crea entradas nuevas en un `Dictionary`, y todos
+los hilos alocan sobre el mismo heap al mismo tiempo. Por defecto, `VentasParalelo.Cli` corria
+con **Workstation GC** (el default de una app de consola en .NET), que no esta pensado para
+paralelismo intensivo — cuando el recolector de basura actua, puede pausar a todos los hilos a
+la vez, una forma de sincronizacion invisible que no aparece en ningun `lock`.
+
+Se activo Server GC (`<ServerGarbageCollection>true</ServerGarbageCollection>` en
+`VentasParalelo.Cli.csproj`), que le da un heap y un hilo de recoleccion por nucleo. Repitiendo
+`comparar --archivo data/ventas_5m.csv --hilos 1,2,4,8` tres veces con esta configuracion y
+promediando la eficiencia con 8 hilos:
+
+| Estrategia | Antes (Workstation GC, promedio de 3 corridas, seccion 1.1) | Con Server GC (promedio de 3 corridas) |
+|---|---|---|
+| Acumuladores locales | 79% | **85%** |
+| Reduccion jerarquica en arbol | 77% | **88%** |
+| Grano grueso | 75% | **83%** |
+| Chunking dinamico | 59% (muy inestable entre corridas) | **91%** (estable) |
+| Round-robin | 53% | **64%** |
+
+Las cinco estrategias mejoraron, de forma consistente en las tres corridas (a diferencia de la
+seccion 1.1, donde la inestabilidad de chunking dinamico era ruido; aqui las tres corridas con
+Server GC dieron 92%/96%/86% — mucho mas apretado). Esto confirma la hipotesis: parte de la
+perdida de eficiencia con 8 hilos no era falta de nucleos fisicos, sino contencion oculta en el
+recolector de basura. La leccion para el reporte: "los hilos trabajan independientes" es cierto
+a nivel del algoritmo (sin locks explicitos), pero no a nivel del runtime — el GC, la cache L3 y
+los nucleos fisicos compartidos siguen acoplando a los hilos aunque el codigo no lo muestre.
+
+Otras mejoras que se consideraron pero no se implementaron (quedan como trabajo futuro): las
+claves de `MontoPorSucursal`/`UnidadesPorProducto` son `string` de un conjunto fijo y chico (8
+sucursales, 12 productos) — reemplazar los `Dictionary<string, T>` por arreglos indexados por
+un id numerico eliminaria el costo de hashing de strings por fila, que hoy es buena parte del
+tiempo de "mapeo".
 
 ## 2. Escalabilidad fuerte (mismo dataset, mas hilos) — `escalar --tipo fuerte`
 
