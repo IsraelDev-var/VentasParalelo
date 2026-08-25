@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/doc/">
+    <File Path="../../../Downloads/VentasParalelo-Arquitectura.pdf" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/VentasParalelo.Cli/VentasParalelo.Cli.csproj" />
     <Project Path="src/VentasParalelo.Core/VentasParalelo.Core.csproj" />
