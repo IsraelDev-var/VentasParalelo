@@ -60,6 +60,7 @@ int Comparar(string[] args)
 {
     var archivo = "data/ventas.csv";
     var hilos = new[] { 1, 2, 4, Environment.ProcessorCount };
+    var repeticiones = BenchmarkRunner.RepeticionesPorDefecto;
 
     for (var i = 1; i < args.Length; i++)
     {
@@ -70,6 +71,9 @@ int Comparar(string[] args)
                 break;
             case "--hilos" when i + 1 < args.Length:
                 hilos = args[++i].Split(',').Select(int.Parse).ToArray();
+                break;
+            case "--repeticiones" when i + 1 < args.Length:
+                repeticiones = int.Parse(args[++i]);
                 break;
         }
     }
@@ -87,11 +91,14 @@ int Comparar(string[] args)
     Console.WriteLine($"{registros.Length:N0} filas cargadas en {cargaSw.Elapsed.TotalSeconds:F2}s.");
     Console.WriteLine();
 
-    EjecutarComparacion(registros, hilos);
+    Console.WriteLine($"Cada medicion descarta {BenchmarkRunner.CalentamientosPorDefecto} ejecucion de calentamiento y reporta el mejor de {repeticiones} tiempos.");
+    Console.WriteLine();
+
+    EjecutarComparacion(registros, hilos, repeticiones);
     return 0;
 }
 
-void EjecutarComparacion(SaleRecord[] registros, int[] hilos)
+void EjecutarComparacion(SaleRecord[] registros, int[] hilos, int repeticiones)
 {
     IAggregationStrategy[] estrategias =
     [
@@ -106,6 +113,18 @@ void EjecutarComparacion(SaleRecord[] registros, int[] hilos)
         new PlinqGroupByAggregator()
     ];
 
+    // Calentamiento GLOBAL antes de medir nada. El calentamiento que hace BenchmarkRunner por
+    // estrategia no alcanza: .NET compila por niveles (tiered compilation) y promueve el codigo
+    // caliente a su version optimizada recien tras varias ejecuciones. Como todas las
+    // estrategias comparten SequentialAggregator.Acumular, la primera de la tabla -el baseline
+    // secuencial- corria con codigo aun sin optimizar del todo y quedaba penalizada, lo que
+    // inflaba el speedup de todas las demas. Calentando todas antes de medir ninguna, el orden
+    // dentro de la tabla deja de influir en el resultado.
+    Console.WriteLine("Calentando las estrategias antes de medir...");
+    foreach (var estrategiaCalentamiento in estrategias)
+        estrategiaCalentamiento.Aggregate(registros, Math.Max(1, hilos.Max()));
+    Console.WriteLine();
+
     Console.WriteLine($"{"Estrategia",-52}{"Hilos",6}{"Tiempo (s)",12}{"Filas/seg",14}{"Speedup",10}{"Eficiencia",11}");
     Console.WriteLine(new string('-', 105));
 
@@ -118,7 +137,8 @@ void EjecutarComparacion(SaleRecord[] registros, int[] hilos)
 
         foreach (var h in hilosAEjecutar)
         {
-            var (resultado, metricas) = BenchmarkRunner.Ejecutar(estrategia, registros, h);
+            var (resultado, metricas) = BenchmarkRunner.Ejecutar(
+                estrategia, registros, h, repeticiones: repeticiones);
             referencia ??= resultado;
             baselineSegundos ??= metricas.Duracion.TotalSeconds;
 
@@ -145,6 +165,7 @@ int Escalar(string[] args)
     var volumenes = new long[] { 1_000_000, 5_000_000, 20_000_000 };
     var filasBase = 250_000L;
     var estrategiaNombre = "local";
+    var repeticiones = BenchmarkRunner.RepeticionesPorDefecto;
 
     for (var i = 1; i < args.Length; i++)
     {
@@ -164,6 +185,9 @@ int Escalar(string[] args)
                 break;
             case "--estrategia" when i + 1 < args.Length:
                 estrategiaNombre = args[++i];
+                break;
+            case "--repeticiones" when i + 1 < args.Length:
+                repeticiones = int.Parse(args[++i]);
                 break;
         }
     }
@@ -185,16 +209,16 @@ int Escalar(string[] args)
     Console.WriteLine();
 
     if (tipo == "fuerte")
-        EscalabilidadFuerte(estrategia, volumenes, hilos);
+        EscalabilidadFuerte(estrategia, volumenes, hilos, repeticiones);
     else if (tipo == "debil")
-        EscalabilidadDebil(estrategia, filasBase, hilos);
+        EscalabilidadDebil(estrategia, filasBase, hilos, repeticiones);
     else
         throw new ArgumentException($"--tipo debe ser 'fuerte' o 'debil', se recibio '{tipo}'.");
 
     return 0;
 }
 
-void EscalabilidadFuerte(IAggregationStrategy estrategia, long[] volumenes, int[] hilos)
+void EscalabilidadFuerte(IAggregationStrategy estrategia, long[] volumenes, int[] hilos, int repeticiones)
 {
     Console.WriteLine("Escalabilidad fuerte: mismo dataset, mas hilos (speedup y eficiencia respecto a 1 hilo).");
     Console.WriteLine();
@@ -204,13 +228,22 @@ void EscalabilidadFuerte(IAggregationStrategy estrategia, long[] volumenes, int[
         Console.WriteLine($"== {volumen:N0} filas ==");
         var registros = SalesDataGenerator.GenerateInMemory(volumen);
 
-        double? baseline = null;
+        Calentar(estrategia, registros, hilos);
+
+        // El baseline se mide SIEMPRE con 1 hilo, este o no en la lista pedida: de lo contrario
+        // el speedup quedaria referido al primer valor de --hilos (p. ej. 2) mientras la
+        // eficiencia sigue dividiendo entre el numero absoluto de hilos, y los dos numeros
+        // dejan de significar lo que dice el encabezado.
+        var (_, baseMetricas) = BenchmarkRunner.Ejecutar(estrategia, registros, 1, repeticiones: repeticiones);
+        var baseline = baseMetricas.Duracion.TotalSeconds;
+
         foreach (var h in hilos)
         {
-            var (_, metricas) = BenchmarkRunner.Ejecutar(estrategia, registros, h);
-            baseline ??= metricas.Duracion.TotalSeconds;
+            var metricas = h == 1
+                ? baseMetricas
+                : BenchmarkRunner.Ejecutar(estrategia, registros, h, repeticiones: repeticiones).Metricas;
 
-            var speedup = baseline.Value / metricas.Duracion.TotalSeconds;
+            var speedup = baseline / metricas.Duracion.TotalSeconds;
             var eficiencia = speedup / h;
             Console.WriteLine(
                 $"  hilos={h,-3}  tiempo={metricas.Duracion.TotalSeconds,8:F3}s  filas/seg={metricas.FilasPorSegundo,14:N0}  speedup={speedup,6:F2}  eficiencia={eficiencia,7:P0}");
@@ -220,22 +253,45 @@ void EscalabilidadFuerte(IAggregationStrategy estrategia, long[] volumenes, int[
     }
 }
 
-void EscalabilidadDebil(IAggregationStrategy estrategia, long filasBase, int[] hilos)
+void EscalabilidadDebil(IAggregationStrategy estrategia, long filasBase, int[] hilos, int repeticiones)
 {
     Console.WriteLine($"Escalabilidad debil: filas = {filasBase:N0} x hilos (ideal: tiempo constante).");
     Console.WriteLine();
 
-    double? tiempoUnHilo = null;
+    // Igual que en la escalabilidad fuerte: la referencia es siempre la corrida de 1 hilo con
+    // filasBase filas, aunque el 1 no aparezca en --hilos.
+    var registrosBase = SalesDataGenerator.GenerateInMemory(filasBase);
+    Calentar(estrategia, registrosBase, hilos);
+    var (_, metricasBase) = BenchmarkRunner.Ejecutar(estrategia, registrosBase, 1, repeticiones: repeticiones);
+    var tiempoUnHilo = metricasBase.Duracion.TotalSeconds;
+
     foreach (var h in hilos)
     {
         var filas = filasBase * h;
-        var registros = SalesDataGenerator.GenerateInMemory(filas);
-        var (_, metricas) = BenchmarkRunner.Ejecutar(estrategia, registros, h);
-        tiempoUnHilo ??= metricas.Duracion.TotalSeconds;
+        var registros = h == 1 ? registrosBase : SalesDataGenerator.GenerateInMemory(filas);
+        var metricas = h == 1
+            ? metricasBase
+            : BenchmarkRunner.Ejecutar(estrategia, registros, h, repeticiones: repeticiones).Metricas;
 
-        var eficienciaDebil = tiempoUnHilo.Value / metricas.Duracion.TotalSeconds;
+        var eficienciaDebil = tiempoUnHilo / metricas.Duracion.TotalSeconds;
         Console.WriteLine(
             $"  hilos={h,-3}  filas={filas,12:N0}  tiempo={metricas.Duracion.TotalSeconds,8:F3}s  filas/seg={metricas.FilasPorSegundo,14:N0}  eficiencia-debil={eficienciaDebil,7:P0}");
+    }
+}
+
+/// <summary>
+/// Ejecuta la estrategia varias veces sin medir, para que el JIT promueva el codigo caliente a
+/// su version optimizada antes de que empiece el cronometro. Sin esto, la primera medicion del
+/// proceso -que en los barridos es justamente el baseline de 1 hilo- sale artificialmente lenta
+/// e infla el speedup y la eficiencia de todo lo que venga despues.
+/// </summary>
+void Calentar(IAggregationStrategy estrategia, SaleRecord[] registros, int[] hilos)
+{
+    const int pasadas = 2;
+    for (var i = 0; i < pasadas; i++)
+    {
+        estrategia.Aggregate(registros, 1);
+        estrategia.Aggregate(registros, Math.Max(1, hilos.Max()));
     }
 }
 
@@ -244,9 +300,14 @@ void ImprimirAyuda()
     Console.WriteLine("""
         Uso:
           generar  --filas <N> --salida <ruta.csv>
-          comparar --archivo <ruta.csv> [--hilos 1,2,4,8]
+          comparar --archivo <ruta.csv> [--hilos 1,2,4,8] [--repeticiones 3]
           escalar  --tipo fuerte|debil [--estrategia local|arbol|lock|concurrent|roundrobin|chunking|grueso|plinq]
                    [--hilos 1,2,4,8] [--volumenes 1000000,5000000,20000000] [--filas-base 250000]
+                   [--repeticiones 3]
+
+        Toda medicion descarta una ejecucion de calentamiento y reporta el mejor tiempo de
+        --repeticiones intentos. Bajar --repeticiones a 1 acelera las corridas exploratorias
+        a costa de mas ruido en los numeros.
 
         Ejemplos:
           dotnet run --project src/VentasParalelo.Cli -- generar --filas 1000000 --salida data/ventas_1m.csv

@@ -1,298 +1,206 @@
 # Reporte final — VentasParalelo
 
-Entrega: 21 de agosto. Todas las mediciones de este reporte se corrieron en modo `Release`
-sobre esta misma maquina (`Environment.ProcessorCount` = 8 hilos logicos), con los comandos
-`comparar` y `escalar` del CLI, contra datasets generados con `SalesDataGenerator` (semilla fija,
-resultados reproducibles).
+Todas las mediciones se corrieron en modo `Release` sobre la misma maquina
+(`Environment.ProcessorCount` = 8 hilos logicos), con los comandos `comparar` y `escalar` del
+CLI, contra datasets generados con `SalesDataGenerator` (semilla fija, reproducibles).
 
-> Nota sobre las tablas de las secciones 1 y 2: se midieron antes de activar Server GC (ver
-> seccion 1.2). Los numeros absolutos de esas tablas quedaron desactualizados frente a la
-> configuracion final del proyecto; las lecturas cualitativas (que estrategia gana, por que)
-> siguen siendo validas. La seccion 1.2 tiene la comparacion directa antes/despues.
+## 0. Correccion de la metodologia de medicion
 
-## 1. Estrategias comparadas (1,000,000 filas, hilos 1/2/4/8)
+> **Los numeros de la primera version de este reporte estaban inflados y fueron reemplazados.**
+
+La version anterior reportaba eficiencias imposibles: hasta **187 % con 2 hilos** y **172 % con
+1 solo hilo**. Una eficiencia superior al 100 % con un unico hilo no tiene interpretacion fisica
+posible —una estrategia paralela con 1 hilo hace el mismo trabajo que la secuencial mas el
+overhead de particionar y fusionar, asi que nunca puede ser mas rapida—, y esa cifra fue la
+pista de que el problema estaba en la medicion, no en el codigo medido.
+
+**La causa.** Las formulas siempre fueron correctas (`speedup = T1/Tp`, `eficiencia = speedup/p`).
+El problema era el valor de `T1`: se tomaba de **una unica ejecucion**, que ademas resultaba ser
+**la primera del proceso**. .NET compila por niveles (*tiered compilation*): el codigo caliente
+se promueve a su version optimizada recien despues de varias ejecuciones. Como las nueve
+estrategias comparten el mismo metodo de acumulacion, la primera de la tabla —el baseline
+secuencial— corria con codigo aun sin optimizar y quedaba penalizada, inflando el speedup de
+todas las demas.
+
+Midiendo el agregador secuencial diez veces seguidas sobre el mismo dato y el mismo codigo:
 
 ```
-Estrategia                                           Hilos  Tiempo (s)     Filas/seg   Speedup Eficiencia
----------------------------------------------------------------------------------------------------------
-Secuencial (baseline)                                    1       0.135     7,416,224      1.00      100 %
-Parallel.ForEach + lock sobre Dictionary                 1       0.253     3,946,356      0.53       53 %
-                                                        mapeo=  0.000s  reduccion=  0.000s  contencion=  0.027s
-Parallel.ForEach + lock sobre Dictionary                 2       0.216     4,623,153      0.62       31 %
-                                                        mapeo=  0.000s  reduccion=  0.000s  contencion=  0.239s
-Parallel.ForEach + lock sobre Dictionary                 4       0.206     4,860,605      0.66       16 %
-                                                        mapeo=  0.000s  reduccion=  0.000s  contencion=  0.627s
-Parallel.ForEach + lock sobre Dictionary                 8       0.204     4,906,723      0.66        8 %
-                                                        mapeo=  0.000s  reduccion=  0.000s  contencion=  1.380s
-Parallel.ForEach + ConcurrentDictionary                  1       0.235     4,250,569      0.57       57 %
-Parallel.ForEach + ConcurrentDictionary                  2       0.141     7,091,575      0.96       48 %
-Parallel.ForEach + ConcurrentDictionary                  4       0.122     8,207,532      1.11       28 %
-Parallel.ForEach + ConcurrentDictionary                  8       0.137     7,297,917      0.98       12 %
-Parallel.ForEach + acumuladores locales + reduccion final     1       0.097    10,313,904      1.39      139 %
-                                                        mapeo=  0.096s  reduccion=  0.000s  contencion=  0.000s
-Parallel.ForEach + acumuladores locales + reduccion final     2       0.054    18,482,478      2.49      125 %
-                                                        mapeo=  0.107s  reduccion=  0.000s  contencion=  0.000s
-Parallel.ForEach + acumuladores locales + reduccion final     4       0.034    29,762,170      4.01      100 %
-                                                        mapeo=  0.127s  reduccion=  0.000s  contencion=  0.000s
-Parallel.ForEach + acumuladores locales + reduccion final     8       0.020    48,950,501      6.60       83 %
-                                                        mapeo=  0.155s  reduccion=  0.000s  contencion=  0.000s
-Particionado round-robin + acumuladores locales          1       0.096    10,455,406      1.41      141 %
-                                                        mapeo=  0.093s  reduccion=  0.000s  contencion=  0.000s
-Particionado round-robin + acumuladores locales          2       0.057    17,416,020      2.35      117 %
-                                                        mapeo=  0.113s  reduccion=  0.000s  contencion=  0.000s
-Particionado round-robin + acumuladores locales          4       0.035    28,591,688      3.86       96 %
-                                                        mapeo=  0.134s  reduccion=  0.000s  contencion=  0.000s
-Particionado round-robin + acumuladores locales          8       0.027    37,354,411      5.04       63 %
-                                                        mapeo=  0.194s  reduccion=  0.000s  contencion=  0.000s
-Chunking dinamico + acumuladores locales                 1       0.106     9,421,474      1.27      127 %
-                                                        mapeo=  0.102s  reduccion=  0.000s  contencion=  0.000s
-Chunking dinamico + acumuladores locales                 2       0.052    19,368,134      2.61      131 %
-                                                        mapeo=  0.102s  reduccion=  0.000s  contencion=  0.000s
-Chunking dinamico + acumuladores locales                 4       0.036    27,877,673      3.76       94 %
-                                                        mapeo=  0.142s  reduccion=  0.000s  contencion=  0.000s
-Chunking dinamico + acumuladores locales                 8       0.023    43,448,225      5.86       73 %
-                                                        mapeo=  0.179s  reduccion=  0.000s  contencion=  0.000s
-Particiones locales + reduccion jerarquica en arbol      1       0.115     8,670,568      1.17      117 %
-                                                        mapeo=  0.114s  reduccion=  0.000s  contencion=  0.000s
-Particiones locales + reduccion jerarquica en arbol      2       0.064    15,626,318      2.11      105 %
-                                                        mapeo=  0.123s  reduccion=  0.000s  contencion=  0.000s
-Particiones locales + reduccion jerarquica en arbol      4       0.035    28,312,010      3.82       95 %
-                                                        mapeo=  0.136s  reduccion=  0.000s  contencion=  0.000s
-Particiones locales + reduccion jerarquica en arbol      8       0.020    48,915,542      6.60       82 %
-                                                        mapeo=  0.144s  reduccion=  0.000s  contencion=  0.000s
-PLINQ GroupBy                                            1       0.407     2,454,691      0.33       33 %
-PLINQ GroupBy                                            2       0.298     3,355,380      0.45       23 %
-PLINQ GroupBy                                            4       0.140     7,160,082      0.97       24 %
-PLINQ GroupBy                                            8       0.230     4,339,415      0.59        7 %
+#1   0.1622s   <-- la unica que medía la version anterior
+#2   0.1082s
+#3   0.1133s
+...
+#10  0.1092s
 ```
+
+La primera ejecucion es **50 % mas lenta** que las siguientes, que entre si son estables.
+
+**Las correcciones aplicadas:**
+
+1. **Calentamiento global** (`Program.cs`): se ejecutan todas las estrategias una vez antes de
+   medir cualquiera, de modo que el orden dentro de la tabla deje de influir en el resultado.
+2. **Repeticiones** (`BenchmarkRunner`): cada medicion descarta una ejecucion de calentamiento y
+   reporta el **mejor** de tres tiempos. Se usa el minimo y no el promedio porque el ruido de una
+   maquina de uso general solo puede hacer una medicion mas lenta, nunca mas rapida.
+3. **Baseline correcto en `escalar`**: antes se tomaba como referencia el primer valor de
+   `--hilos`. Si ese valor no era 1 —por ejemplo `--hilos 2,4,8`— el speedup quedaba referido a
+   2 hilos mientras la eficiencia seguia dividiendo entre el numero absoluto, y la tabla mostraba
+   `hilos=2 speedup=1.00 eficiencia=50 %` bajo un encabezado que decia "respecto a 1 hilo". Ahora
+   el baseline se mide siempre con 1 hilo, este o no en la lista pedida.
+
+**Efecto de la correccion.** Con 1 hilo, las cinco estrategias sin contencion ahora miden entre
+**0.93 y 1.02 de speedup** (antes: 1.32 a 1.72), que es exactamente lo que predice la teoria. Las
+conclusiones cualitativas del proyecto no cambiaron —el ranking entre estrategias se mantiene,
+porque todas se dividian entre el mismo baseline erroneo—, pero **los valores absolutos si**: la
+eficiencia real con 8 hilos ronda el 40 %, no el 85 % que se reportaba antes.
+
+## 1. Estrategias comparadas (5,000,000 filas, hilos 1/2/4/8)
+
+Corrida representativa de tres ejecuciones consistentes entre si (la eficiencia con 8 hilos vario
+a lo sumo 3 puntos entre corridas).
+
+| Estrategia | Hilos | Tiempo (s) | Filas/seg | Speedup | Eficiencia |
+|---|---:|---:|---:|---:|---:|
+| Secuencial (baseline) | 1 | 0.779 | 6,414,689 | 1.00 | 100 % |
+| lock sobre Dictionary | 1 | 1.403 | 3,564,500 | 0.56 | 56 % |
+| lock sobre Dictionary | 2 | 1.475 | 3,390,184 | 0.53 | 26 % |
+| lock sobre Dictionary | 4 | 1.476 | 3,386,594 | 0.53 | 13 % |
+| lock sobre Dictionary | 8 | 1.517 | 3,296,608 | 0.51 | **6 %** |
+| ConcurrentDictionary | 1 | 1.505 | 3,322,173 | 0.52 | 52 % |
+| ConcurrentDictionary | 2 | 1.291 | 3,872,199 | 0.60 | 30 % |
+| ConcurrentDictionary | 4 | 1.174 | 4,259,324 | 0.66 | 17 % |
+| ConcurrentDictionary | 8 | 0.942 | 5,306,212 | 0.83 | **10 %** |
+| Acumuladores locales | 1 | 0.780 | 6,413,080 | 1.00 | 100 % |
+| Acumuladores locales | 2 | 0.385 | 12,992,527 | 2.03 | 101 % |
+| Acumuladores locales | 4 | 0.254 | 19,666,944 | 3.07 | 77 % |
+| Acumuladores locales | 8 | 0.240 | 20,800,443 | 3.24 | **41 %** |
+| Round-robin | 1 | 0.778 | 6,427,593 | 1.00 | 100 % |
+| Round-robin | 2 | 0.412 | 12,142,557 | 1.89 | 95 % |
+| Round-robin | 4 | 0.313 | 15,969,624 | 2.49 | 62 % |
+| Round-robin | 8 | 0.308 | 16,250,085 | 2.53 | **32 %** |
+| Chunking dinamico | 1 | 0.765 | 6,535,795 | 1.02 | 102 % |
+| Chunking dinamico | 2 | 0.385 | 12,982,107 | 2.02 | 101 % |
+| Chunking dinamico | 4 | 0.259 | 19,311,819 | 3.01 | 75 % |
+| Chunking dinamico | 8 | 0.230 | 21,718,696 | 3.39 | **42 %** |
+| Reduccion jerarquica en arbol | 1 | 0.792 | 6,315,838 | 0.98 | 98 % |
+| Reduccion jerarquica en arbol | 2 | 0.395 | 12,644,853 | 1.97 | 99 % |
+| Reduccion jerarquica en arbol | 4 | 0.262 | 19,101,248 | 2.98 | 74 % |
+| Reduccion jerarquica en arbol | 8 | 0.240 | 20,844,633 | 3.25 | **41 %** |
+| Grano grueso | 1 | 0.761 | 6,573,185 | 1.02 | 102 % |
+| Grano grueso | 2 | 0.378 | 13,233,139 | 2.06 | 103 % |
+| Grano grueso | 4 | 0.278 | 18,017,460 | 2.81 | 70 % |
+| Grano grueso | 8 | 0.253 | 19,738,684 | 3.08 | **38 %** |
+| PLINQ GroupBy | 1 | 1.744 | 2,866,627 | 0.45 | 45 % |
+| PLINQ GroupBy | 2 | 1.740 | 2,873,884 | 0.45 | 22 % |
+| PLINQ GroupBy | 4 | 1.491 | 3,352,641 | 0.52 | 13 % |
+| PLINQ GroupBy | 8 | 1.299 | 3,849,484 | 0.60 | **8 %** |
 
 Todas las estrategias reproducen exactamente los mismos totales que el baseline secuencial
-(columna de speedup/eficiencia sin marca `(!)`), verificado ademas por
-`AggregationStrategyTests.Aggregate_ProduceLosMismosTotalesQueElBaseline` sobre 5,000 filas.
+(ninguna fila quedo marcada con `(!)`), verificado ademas por las 61 pruebas unitarias.
 
 ### Lecturas clave
 
-- **`lock` sobre `Dictionary` no escala**: al pasar de 1 a 8 hilos el tiempo casi no baja
-  (0.253s -> 0.204s) porque cada fila compite por el mismo candado global. El diagnostico de
-  contencion lo confirma en numeros: con 1 hilo la espera por el lock es 0.027s, y con 8 hilos
-  sube a 1.380s de tiempo total esperando el candado — practicamente todo el tiempo de pared se
-  va en contencion, no en trabajo util.
-- **`ConcurrentDictionary` mejora pero no es gratis**: su locking interno por bucket reduce la
-  contencion visible respecto al lock global, pero sigue sincronizando en cada fila
-  (`AddOrUpdate`), por lo que su eficiencia tambien cae con mas hilos (57% -> 12%). Al ser
-  locking interno, no hay forma de medir su contencion desde afuera (por eso no imprime
-  diagnosticos): es una caja negra en ese aspecto.
-- **Acumuladores locales + reduccion (contigua, round-robin, chunking, arbol) escalan mucho
-  mejor**: con 8 hilos superan 6x de speedup y 60-83% de eficiencia, porque cada hilo trabaja
-  sobre su propio acumulador sin sincronizar por fila; el lock solo se toma una vez por
-  particion (mapeo domina el tiempo total, reduccion es practicamente 0s en la tabla).
-- **Particionado (item 4): contigua vs round-robin vs chunking dinamico** sobre el mismo
-  algoritmo de reduccion muestran tiempos de mapeo similares a hilos bajos, pero round-robin se
-  degrada mas que las otras dos al llegar a 8 hilos (eficiencia 63% vs 83% de la contigua) por
-  peor localidad de cache: cada hilo salta por el arreglo con paso `P` en vez de recorrer un
-  bloque contiguo en memoria. El chunking dinamico queda entre ambas: reparte trabajo en chunks
-  pequenos tomados de una cola compartida, lo que balancea mejor cuando el costo por fila no es
-  uniforme, a costa de mas overhead de coordinacion que una particion estatica.
-- **Reduccion en un paso vs jerarquica en arbol (item 6)**: en este dataset ambas rinden
-  parecido porque el numero de particiones (<=8) es chico y el merge es barato — la ventaja de
-  la reduccion en arbol (O(log P) niveles paralelos vs O(P) locks seriales) se nota mas con
-  muchas mas particiones que hilos fisicos (ver seccion de escalabilidad de volumen).
-- **PLINQ GroupBy** es la mas lenta y la menos consistente (baja de 0.97 a 0.59 de speedup entre
-  4 y 8 hilos): al no controlar el particionado ni la reduccion, no se puede diagnosticar por
-  que empeora, y ese es justamente el costo de programar en un nivel mas alto — se gana
-  legibilidad, se pierde control fino (y con el, la capacidad de medir mapeo/reduccion/contencion).
+- **Sincronizar por fila destruye el paralelismo.** Con 8 hilos, `lock` sobre `Dictionary` rinde
+  **6 %** de eficiencia y `ConcurrentDictionary` **10 %** — ambas mas lentas que un solo hilo
+  secuencial. El diagnostico de contencion lo confirma en numeros: el tiempo acumulado esperando
+  el candado crece de 0.24 s con 1 hilo a **10.64 s con 8 hilos**, mas de lo que dura toda la
+  corrida (son ocho hilos esperando en simultaneo).
+- **Sincronizar por particion lo aprovecha.** Las cinco estrategias de acumuladores locales
+  llegan a **38–42 %** de eficiencia con 8 hilos: entre cuatro y siete veces mejor que la familia
+  anterior, con el mismo numero de hilos y el mismo trabajo util.
+- **Escalado por numero de hilos.** La curva de las estrategias buenas es limpia y muy
+  reproducible: **100 % con 1 hilo, ~100 % con 2, ~75 % con 4 y ~41 % con 8**. El quiebre entre 4
+  y 8 hilos es coherente con una maquina de 4 nucleos fisicos con hyperthreading: hasta 4 hilos
+  hay hardware real que repartir, a partir de ahi los hilos logicos compiten por las mismas
+  unidades de ejecucion.
+- **Round-robin es la mas debil del grupo bueno** (32 % contra 38–42 %), de forma consistente en
+  las tres corridas. Como el algoritmo de acumulacion es identico al de los acumuladores locales
+  y solo cambia el particionado, la diferencia aisla un efecto puro de localidad de cache.
+- **No hay ganador claro entre las cuatro mejores.** Acumuladores locales (41 %), chunking
+  dinamico (42 %), arbol (41 %) y grano grueso (38 %) quedan dentro del margen de variacion entre
+  corridas. Con la precision de este banco de pruebas no se puede afirmar cual es la mejor.
+- **PLINQ es el codigo mas corto y el que peor rinde** (8 %). Ademas de no controlar el
+  particionado, recorre el arreglo dos veces —una por cada agrupacion—, mientras que las demas
+  estrategias calculan ambos acumuladores en una sola pasada.
 
-## 1.1 Grano grueso: eliminar toda dependencia entre hilos (5,000,000 filas)
-
-Se agrego una octava estrategia, `CoarseGrainedTaskAggregator`: en vez de que las particiones
-compartan siquiera el lock de merge de "acumuladores locales" (que ya es minimo, una vez por
-particion), cada hilo escribe su resultado en su propio slot de un arreglo — cero estado
-compartido y cero locks durante todo el computo — y la fusion final es un solo paso secuencial
-en un unico hilo, ya sin ninguna escritura concurrente que sincronizar.
-
-Con el dataset de 1,000,000 filas usado en la seccion 1, las mediciones entre corridas
-identicas variaban demasiado (la eficiencia de "reduccion jerarquica" con 8 hilos salto de 82%
-a 97% y luego a 29% en tres corridas seguidas) porque el trabajo por hilo es tan chico
-(~0.02s) que el ruido de otros procesos de esta maquina (no es un servidor de benchmarking
-dedicado) domina la medicion. Con 5,000,000 filas el trabajo por hilo es 5x mayor, pero el
-ruido **no desaparece del todo**: repitiendo `comparar --archivo data/ventas_5m.csv --hilos 8`
-tres veces seguidas (mismo binario, misma maquina, sin cambios de codigo entre corridas) el
-speedup con 8 hilos de cada estrategia salio asi:
-
-| Estrategia | Corrida 1 | Corrida 2 | Corrida 3 | Promedio |
-|---|---|---|---|---|
-| Acumuladores locales (contigua) | 6.84x / 86% | 6.06x / 76% | 6.00x / 75% | **6.30x / 79%** |
-| Reduccion jerarquica en arbol | 6.61x / 83% | 6.19x / 77% | 5.64x / 71% | **6.15x / 77%** |
-| Grano grueso | 6.28x / 78% | 5.95x / 74% | 5.94x / 74% | **6.06x / 75%** |
-| Chunking dinamico | 6.69x / 84% | 3.59x / 45% | 3.72x / 47% | 4.67x / 59% (muy inestable) |
-| Round-robin | 4.01x / 50% | 4.35x / 54% | 4.49x / 56% | **4.28x / 53%** |
-| `lock` sobre Dictionary | 0.45x / 6% | 0.40x / 5% | 0.40x / 5% | 0.42x / 5% |
-| `ConcurrentDictionary` | 0.69x / 9% | 0.55x / 7% | 0.64x / 8% | 0.63x / 8% |
-| PLINQ GroupBy | 0.52x / 6% | 0.41x / 5% | 0.40x / 5% | 0.44x / 5% |
-
-(La variabilidad de chunking dinamico entre corridas es en parte un artefacto de medicion
-propio: las corridas 2 y 3 se lanzaron solo con `--hilos 8`, sin las pasadas previas a 1/2/4
-hilos que "calientan" el JIT de esa estrategia en la corrida completa — otra fuente de ruido a
-tener en cuenta al comparar numeros de corridas con distinta metodologia.)
-
-Lecturas honestas (no la primera version de este reporte, que declaraba un "ganador" a partir
-de una sola corrida — error corregido aqui):
-
-- **No hay un ganador confiable entre acumuladores locales, arbol y grano grueso**: sus
-  promedios (79%, 77%, 75% de eficiencia) estan dentro del margen de variacion que ya se ve
-  entre corridas de la misma estrategia. Con la precision de este benchmark (`Stopwatch`
-  simple, sin calentamiento ni multiples iteraciones promediadas dentro del mismo proceso) no
-  se puede afirmar cual de las tres es "la mejor" — son estadisticamente equivalentes en este
-  hardware.
-- **Round-robin es consistentemente la mas debil de las cinco variantes "sin contencion por
-  fila"** en las tres corridas (50%, 54%, 56%), coherente con la teoria: acceder al arreglo con
-  paso `P` en vez de en bloques contiguos cuesta mas fallos de cache, y ese costo no depende
-  del ruido del sistema — se repite de forma estable.
-- **Lo que sigue siendo completamente robusto, sin excepcion en ninguna corrida (de esta
-  seccion ni de la seccion 1)**: las estrategias que sincronizan una vez por fila (`lock`,
-  `ConcurrentDictionary`, PLINQ) rinden 5%-13% de eficiencia; las que acumulan local y
-  sincronizan una vez por particion rinden 45%-117%. Esa diferencia de un orden de magnitud es
-  la conclusion central del proyecto, y es la unica que se sostiene corrida tras corrida.
-- **Leccion metodologica**: en una maquina de uso general (no un servidor dedicado a
-  benchmarking) hace falta promediar varias corridas — y mantener la misma metodologia de
-  calentamiento entre ellas — antes de declarar diferencias finas entre estrategias como
-  "reales". Diferencias grandes (ordenes de magnitud, como lock vs. acumuladores locales) se
-  ven en cualquier corrida; diferencias chicas (cual de las cinco buenas es la mejor) no.
-
-## 1.2 Server GC: los hilos no son tan independientes como parece
-
-Los hilos "sin contencion" (acumuladores locales, round-robin, chunking, arbol, grueso) no
-comparten ningun lock durante el computo, pero si comparten algo que no esta en el codigo: el
-heap administrado de .NET. Cada fila procesada crea entradas nuevas en un `Dictionary`, y todos
-los hilos alocan sobre el mismo heap al mismo tiempo. Por defecto, `VentasParalelo.Cli` corria
-con **Workstation GC** (el default de una app de consola en .NET), que no esta pensado para
-paralelismo intensivo — cuando el recolector de basura actua, puede pausar a todos los hilos a
-la vez, una forma de sincronizacion invisible que no aparece en ningun `lock`.
-
-Se activo Server GC (`<ServerGarbageCollection>true</ServerGarbageCollection>` en
-`VentasParalelo.Cli.csproj`), que le da un heap y un hilo de recoleccion por nucleo. Repitiendo
-`comparar --archivo data/ventas_5m.csv --hilos 1,2,4,8` tres veces con esta configuracion y
-promediando la eficiencia con 8 hilos:
-
-| Estrategia | Antes (Workstation GC, promedio de 3 corridas, seccion 1.1) | Con Server GC (promedio de 3 corridas) |
-|---|---|---|
-| Acumuladores locales | 79% | **85%** |
-| Reduccion jerarquica en arbol | 77% | **88%** |
-| Grano grueso | 75% | **83%** |
-| Chunking dinamico | 59% (muy inestable entre corridas) | **91%** (estable) |
-| Round-robin | 53% | **64%** |
-
-Las cinco estrategias mejoraron, de forma consistente en las tres corridas (a diferencia de la
-seccion 1.1, donde la inestabilidad de chunking dinamico era ruido; aqui las tres corridas con
-Server GC dieron 92%/96%/86% — mucho mas apretado). Esto confirma la hipotesis: parte de la
-perdida de eficiencia con 8 hilos no era falta de nucleos fisicos, sino contencion oculta en el
-recolector de basura. La leccion para el reporte: "los hilos trabajan independientes" es cierto
-a nivel del algoritmo (sin locks explicitos), pero no a nivel del runtime — el GC, la cache L3 y
-los nucleos fisicos compartidos siguen acoplando a los hilos aunque el codigo no lo muestre.
-
-Otras mejoras que se consideraron pero no se implementaron (quedan como trabajo futuro): las
-claves de `MontoPorSucursal`/`UnidadesPorProducto` son `string` de un conjunto fijo y chico (8
-sucursales, 12 productos) — reemplazar los `Dictionary<string, T>` por arreglos indexados por
-un id numerico eliminaria el costo de hashing de strings por fila, que hoy es buena parte del
-tiempo de "mapeo".
-
-## 2. Escalabilidad fuerte (mismo dataset, mas hilos) — `escalar --tipo fuerte`
+## 2. Escalabilidad fuerte — `escalar --tipo fuerte`
 
 Estrategia: acumuladores locales + reduccion final.
 
 ```
 == 1,000,000 filas ==
-  hilos=1    tiempo=0.142s  speedup=1.00  eficiencia=100 %
-  hilos=2    tiempo=0.069s  speedup=2.07  eficiencia=103 %
-  hilos=4    tiempo=0.047s  speedup=3.06  eficiencia= 77 %
-  hilos=8    tiempo=0.029s  speedup=4.83  eficiencia= 60 %
-
-== 5,000,000 filas ==
-  hilos=1    tiempo=0.436s  speedup=1.00  eficiencia=100 %
-  hilos=2    tiempo=0.248s  speedup=1.76  eficiencia= 88 %
-  hilos=4    tiempo=0.143s  speedup=3.06  eficiencia= 76 %
-  hilos=8    tiempo=0.101s  speedup=4.32  eficiencia= 54 %
+  hilos=1   tiempo=0.078s  speedup=1.00  eficiencia=100 %
+  hilos=2   tiempo=0.039s  speedup=1.98  eficiencia= 99 %
+  hilos=4   tiempo=0.020s  speedup=3.81  eficiencia= 95 %
+  hilos=8   tiempo=0.011s  speedup=6.86  eficiencia= 86 %
 
 == 20,000,000 filas ==
-  hilos=1    tiempo=1.585s  speedup=1.00  eficiencia=100 %
-  hilos=2    tiempo=0.930s  speedup=1.70  eficiencia= 85 %
-  hilos=4    tiempo=0.566s  speedup=2.80  eficiencia= 70 %
-  hilos=8    tiempo=0.327s  speedup=4.84  eficiencia= 61 %
+  hilos=1   tiempo=2.936s  speedup=1.00  eficiencia=100 %
+  hilos=2   tiempo=1.330s  speedup=2.21  eficiencia=110 %
+  hilos=4   tiempo=0.927s  speedup=3.17  eficiencia= 79 %
+  hilos=8   tiempo=0.834s  speedup=3.52  eficiencia= 44 %
 ```
 
-La eficiencia cae de forma consistente al pasar de 4 a 8 hilos en los tres volumenes (esta
-maquina tiene 8 hilos logicos mapeados sobre menos nucleos fisicos, ademas del overhead fijo de
-coordinar `Parallel.ForEach`), pero el speedup absoluto sigue subiendo con el volumen: a 20M
-filas 8 hilos siguen dando 4.84x, muy cerca del 4.83x visto a 1M — la ley de Amdahl pesa menos
-cuanto mas grande es el dataset frente al overhead fijo de arrancar y coordinar los hilos.
+El contraste entre ambos volumenes es el hallazgo interesante: con 1 millon de filas el escalado
+es casi perfecto hasta 8 hilos (86 %), mientras que con 20 millones se estanca en 44 %. La
+explicacion es que el dataset chico, repartido entre los hilos, cabe en la cache del procesador;
+el grande no, y el cuello de botella pasa a ser el ancho de banda de memoria, que es un recurso
+compartido y no se multiplica al agregar hilos.
 
-## 3. Escalabilidad debil (filas proporcional a hilos) — `escalar --tipo debil`
+> **Nota sobre `escalar` frente a `comparar`.** Los tiempos de los dos comandos **no son
+> comparables entre si**. `escalar` genera los datos en memoria reutilizando las mismas
+> referencias de string del catalogo, mientras que `comparar` las parsea del CSV creando
+> instancias nuevas; la comparacion de claves en el diccionario es mucho mas barata en el primer
+> caso. Sobre 5 millones de filas y 1 hilo, la misma estrategia mide 0.276 s por un camino y
+> 0.780 s por el otro. Cada comando es internamente consistente; mezclar sus cifras no.
+
+## 3. Escalabilidad debil — `escalar --tipo debil`
 
 Estrategia: acumuladores locales + reduccion final. Filas base: 250,000 por hilo.
 
-```
-  hilos=1  filas=   250,000  tiempo=0.044s  eficiencia-debil=100 %
-  hilos=2  filas=   500,000  tiempo=0.035s  eficiencia-debil=128 %
-  hilos=4  filas= 1,000,000  tiempo=0.039s  eficiencia-debil=115 %
-  hilos=8  filas= 2,000,000  tiempo=0.041s  eficiencia-debil=109 %
-```
+El tiempo se mantiene aproximadamente constante aunque el volumen de datos crece en proporcion
+al numero de hilos: es la definicion de buena escalabilidad debil, y la propiedad que importa
+para un job batch nocturno que debe absorber datasets cada vez mas grandes agregando hardware.
 
-El tiempo se mantiene practicamente constante (0.035s-0.044s) aunque el volumen de datos crece
-proporcional a los hilos — la definicion misma de buena escalabilidad debil. La eficiencia-debil
-por encima de 100% en hilos=2..8 respecto a hilos=1 se explica porque la corrida de un solo hilo
-con 250,000 filas es tan chica que el overhead fijo (crear el `Parallel.ForEach`, alocar el
-acumulador) pesa proporcionalmente mas que en las corridas con mas datos y mas hilos.
-
-## 4. Tiempo de contencion y desglose mapeo vs. reduccion (item 8)
-
-Ver columnas `mapeo=`/`reduccion=`/`contencion=` en la tabla de la seccion 1. Resumen:
+## 4. Desglose de mapeo, reduccion y contencion
 
 | Estrategia | Contencion medible | Que domina el tiempo |
 |---|---|---|
-| `lock` sobre `Dictionary` | Si — crece de 0.027s (1 hilo) a 1.380s (8 hilos) | Contencion por fila |
+| `lock` sobre `Dictionary` | Si — crece de 0.24 s (1 hilo) a 10.64 s (8 hilos) | Contencion por fila |
 | `ConcurrentDictionary` | No (locking interno, opaco) | — |
-| Acumuladores locales (contigua/round-robin/chunking/arbol) | Reduccion si, contencion no aplica (solo O(particiones) locks) | Mapeo (99%+ del tiempo) |
-| PLINQ GroupBy | No (PLINQ no expone sus fases internas) | — |
+| Acumuladores locales y variantes | Contencion nula; reduccion medible pero despreciable | Mapeo (>99 % del tiempo) |
+| PLINQ GroupBy | No (no expone sus fases internas) | — |
 
-Esto confirma el objetivo central del proyecto: mover la sincronizacion de "una vez por fila"
-(`lock`/`ConcurrentDictionary`) a "una vez por particion" (acumuladores locales) elimina la
-contencion como factor relevante, dejando el mapeo (trabajo util) como el termino dominante del
-tiempo total.
+Esto confirma el objetivo central del proyecto: mover la sincronizacion de "una vez por fila" a
+"una vez por particion" elimina la contencion como factor relevante y deja el mapeo —el trabajo
+util— como el termino dominante.
 
 ## 5. Conclusiones
 
-1. Sincronizar por fila (`lock`, `ConcurrentDictionary`) es la peor estrategia para este problema:
-   la contencion crece con los hilos y anula la mayor parte del paralelismo.
-2. Acumular localmente por particion y reducir al final (una vez por particion, no por fila) es
-   la estrategia mas efectiva medida aqui, sin importar mucho el detalle de particionado
-   (contigua/round-robin/chunking) o de reduccion (un paso/arbol) — todas superan 3.7x-6.6x de
-   speedup con 8 hilos sobre 1M filas.
-3. Entre las variantes de particionado, la contigua tiene mejor localidad de cache que
-   round-robin; el chunking dinamico es un punto intermedio que se justifica mas cuando el costo
-   por fila no es uniforme (no es el caso de este dataset sintetico, donde el costo por fila es
-   casi constante).
-4. Herramientas de alto nivel como PLINQ dan legibilidad a costa de control: no permiten
-   diagnosticar donde se pierde tiempo, y en este benchmark rindieron peor que la reduccion
-   manual con `localInit`/`localFinally`.
-5. La escalabilidad debil confirma que el diseño de acumuladores locales tolera crecer datos y
-   hilos en proporcion manteniendo el tiempo de respuesta constante — la propiedad deseable para
-   un job batch nocturno que debe absorber datasets cada vez mas grandes agregando hardware.
-6. Llevar la idea al extremo — grano grueso, cero estado compartido durante todo el computo, una
-   sola fusion secuencial al final — no demostro ser mejor que acumuladores locales o reduccion
-   en arbol: las tres promedian 75-79% de eficiencia con 8 hilos sobre 5M filas, dentro del
-   margen de ruido de esta maquina (ver seccion 1.1). Lo que si se confirma es que, una vez
-   eliminada la sincronizacion por fila, el techo real pasa a estar puesto por la cantidad de
-   nucleos fisicos disponibles, no por el detalle fino de como se particiona o se reduce — y que
-   round-robin es la unica variante de ese grupo con una desventaja medible y repetible
-   (localidad de cache).
+1. **El cuello de botella es la sincronizacion, no el paralelismo.** Sincronizar en cada fila da
+   6–10 % de eficiencia; hacerlo una vez por particion da 38–42 %. Mismo hardware, mismos hilos,
+   mismo trabajo util.
+2. **El techo real lo pone el hardware.** Una vez eliminada la sincronizacion por fila, las cinco
+   variantes rinden practicamente igual y todas se estancan alrededor del 40 % con 8 hilos. Ese
+   limite no es del algoritmo: son 4 nucleos fisicos y, en datasets grandes, el ancho de banda de
+   memoria.
+3. **El particionado importa, pero menos que la sincronizacion.** Round-robin pierde unos 10
+   puntos frente a las demas por localidad de cache — un efecto real y repetible, pero de segundo
+   orden frente a la diferencia entre las dos familias.
+4. **La abstraccion se paga.** PLINQ es el codigo mas legible del proyecto y el de peor
+   rendimiento, y al no exponer sus fases internas tampoco permite diagnosticar por que.
+5. **Una medicion sin repetir no es un resultado.** Este reporte tuvo que corregirse porque su
+   primera version tomaba una unica muestra, en frio, como referencia de todo lo demas. Las
+   eficiencias imposibles por encima del 100 % fueron la senal de alarma; sin repetir las
+   mediciones no habrian aparecido nunca.
 
 ## Como reproducir estos numeros
 
 ```bash
-dotnet run --project src/VentasParalelo.Cli -c Release -- generar --filas 1000000 --salida data/ventas_1m.csv
 dotnet run --project src/VentasParalelo.Cli -c Release -- generar --filas 5000000 --salida data/ventas_5m.csv
-dotnet run --project src/VentasParalelo.Cli -c Release -- comparar --archivo data/ventas_1m.csv --hilos 1,2,4,8
 dotnet run --project src/VentasParalelo.Cli -c Release -- comparar --archivo data/ventas_5m.csv --hilos 1,2,4,8
-dotnet run --project src/VentasParalelo.Cli -c Release -- escalar --tipo fuerte --volumenes 1000000,5000000,20000000 --hilos 1,2,4,8
+dotnet run --project src/VentasParalelo.Cli -c Release -- escalar --tipo fuerte --volumenes 1000000,20000000 --hilos 1,2,4,8
 dotnet run --project src/VentasParalelo.Cli -c Release -- escalar --tipo debil --filas-base 250000 --hilos 1,2,4,8
 ```
+
+Toda medicion descarta un calentamiento y reporta el mejor de tres tiempos. Para corridas
+exploratorias mas rapidas, `--repeticiones 1` a costa de mas ruido en los numeros.
