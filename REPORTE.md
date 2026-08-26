@@ -53,6 +53,32 @@ conclusiones cualitativas del proyecto no cambiaron —el ranking entre estrateg
 porque todas se dividian entre el mismo baseline erroneo—, pero **los valores absolutos si**: la
 eficiencia real con 8 hilos ronda el 40 %, no el 85 % que se reportaba antes.
 
+### Conclusion retirada: la supuesta mejora por Server GC
+
+La version anterior de este reporte afirmaba que activar **Server GC** mejoraba la eficiencia
+entre 6 y 32 puntos porcentuales, y lo presentaba como evidencia de que el recolector de basura
+era un punto de sincronizacion oculto entre hilos. **Esa conclusion era falsa**: salia de comparar
+mediciones tomadas con la metodologia defectuosa descrita arriba.
+
+Repitiendo la comparacion con el metodo corregido, sobre 5 millones de filas y 8 hilos, ejecutando
+ambas configuraciones una a continuacion de la otra (`DOTNET_gcServer=0` y `=1`):
+
+| Estrategia | Workstation GC | Server GC |
+|---|---:|---:|
+| Acumuladores locales | 39 % | 35 % |
+| Round-robin | 29 % | 29 % |
+| Chunking dinamico | 42 % | 41 % |
+| Reduccion jerarquica en arbol | 43 % | 38 % |
+| Grano grueso | 39 % | 40 % |
+
+Las diferencias son mas chicas que la variacion entre corridas de una misma configuracion: en
+este banco de pruebas **Server GC no produce una mejora medible**. La explicacion es coherente con
+el resto de los datos: los acumuladores de este proyecto son diminutos (8 sucursales y 12
+productos), de modo que la presion sobre el heap es minima y el recolector casi no interviene.
+
+La opcion se dejo activada en `VentasParalelo.Cli.csproj` porque es la recomendada para cargas
+paralelas en general, pero **no se le atribuye ninguna mejora medida en este proyecto**.
+
 ## 1. Estrategias comparadas (5,000,000 filas, hilos 1/2/4/8)
 
 Corrida representativa de tres ejecuciones consistentes entre si (la eficiencia con 8 hilos vario
